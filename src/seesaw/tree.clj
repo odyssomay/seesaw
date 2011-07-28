@@ -25,3 +25,20 @@
     (removeTreeModelListener [this listener])
     (valueForPathChanged [this path newValue])))
 
+(defn update-tree! 
+  "Update a tree.
+  The model is optional, if not supplied this function refreshes 
+  the tree (useful for e.g. file trees).
+  
+  Expanded nodes will still be expanded after update, given that
+  the node itself didn't change.
+  "
+  {:arglists '([tree model?])}
+  [tree & [model]]
+  (let [visible_paths (doall
+                        (for [row (range (.getRowCount tree))]
+                          (.getPathForRow tree row)))]
+    (.setModel tree (if model model (.getModel tree)))
+    (doseq [path visible_paths]
+      (.makeVisible tree path)))
+  tree)
