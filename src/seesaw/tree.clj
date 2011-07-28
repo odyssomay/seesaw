@@ -31,7 +31,7 @@
   the tree (useful for e.g. file trees).
   
   Expanded nodes will still be expanded after update, given that
-  the node itself didn't change.
+  the expanded node didn't change.
   "
   {:arglists '([tree model?])}
   [tree & [model]]
