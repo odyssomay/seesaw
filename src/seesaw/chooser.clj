@@ -11,8 +11,9 @@
 (ns ^{:doc "File chooser and other common dialogs."
       :author "Dave Ray"}
   seesaw.chooser
-  (:use [seesaw util options color])
-  (:import [javax.swing JFileChooser]))
+  (:use seesaw.util)
+  (:import javax.swing.filechooser.FileFilter
+           [javax.swing JFileChooser]))
 
 (def ^{:private true} file-chooser-types {
   :open   JFileChooser/OPEN_DIALOG
@@ -27,17 +28,14 @@
 })
 
 (def ^{:private true} file-chooser-options {
-  :dir (default-option :dir
-         (fn [^JFileChooser chooser dir] 
-           (.setCurrentDirectory chooser (if (instance? java.io.File dir) dir 
-                                            (java.io.File. (str dir))))))
-  :multi? (bean-option [:multi? :multi-selection-enabled] JFileChooser boolean)
-  :selection-mode (bean-option [:selection-mode :file-selection-mode] JFileChooser file-selection-modes)
-  :filters (default-option :filters 
-             #(doseq [[name exts] %2]
-                (.setFileFilter 
-                  ^JFileChooser %1 
-                  (javax.swing.filechooser.FileNameExtensionFilter. name (into-array exts)))))
+  :dir (fn [^JFileChooser chooser dir] 
+         (.setCurrentDirectory chooser (if (instance? java.io.File dir) dir 
+                                            (java.io.File. (str dir)))))
+  :multi? #(.setMultiSelectionEnabled ^JFileChooser %1 (boolean %2))
+  :selection-mode #(.setFileSelectionMode ^JFileChooser %1 (get file-selection-modes %2))
+  :filter #(.setFileFilter ^JFileChooser %1 %2)
+  :filters #(doseq [[name exts] %2]
+              (.setFileFilter ^JFileChooser %1 (javax.swing.filechooser.FileNameExtensionFilter. name (into-array exts))))
 })
 
 (def ^{:private true} last-dir (atom nil))
@@ -58,6 +56,27 @@
   (reset! last-dir (.getCurrentDirectory chooser))
   chooser)
 
+(defn file-filter
+  "Create a FileFilter.
+  All options are necessary.
+  
+  Arguments:
+  
+    accept - a function taking a java.awt.File
+             returning true if the file should be shown,
+             false otherwise.
+  
+    description - description of this filter, will show up in the 
+                  filter-selection box when opening a file choosing dialog.
+  "
+  [accept description]
+  (proxy [FileFilter] []
+    (accept [file]
+      (if (accept file)
+        true false))
+    (getDescription []
+      description)))
+
 (defn choose-file
   "Choose a file to open or save. The arguments can take two forms. First, with
   an initial parent component which will act as the parent of the dialog.
@@ -77,6 +96,7 @@
     :multi?  If true, multi-selection is enabled and a seq of files is returned.
     :selection-mode The file selection mode: :files-only, :dirs-only and :files-and-dirs.
                     Defaults to :files-only
+    :filter A FileFilter, see (file-filter).
     :filters A seq of lists where each list contains a filter name and a seq of
              extensions as strings for that filter. Default: [].
     :remember-directory? Flag specifying whether to remember the directory for future
@@ -122,24 +142,3 @@
             (remember-chooser-dir chooser))
           (success-fn chooser (if multi? (.getSelectedFiles chooser) (.getSelectedFile chooser))))
       :else (cancel-fn chooser))))
-
-(defn choose-color
-  "Choose a color with a color chooser dialog. The optional first argument is the
-  parent component for the dialog. The rest of the args is a list of key/value 
-  pairs:
-  
-          :color The initial selected color (see seesaw.color/to-color)
-          :title The dialog's title
-  
-  Returns the selected color or nil if canceled.
-  
-  See:
-    http://download.oracle.com/javase/6/docs/api/javax/swing/JColorChooser.html
-  "
-  [& args]
-  (let [[parent & {:keys [color title]
-                   :or { title "Choose a color"}
-                   :as opts}] (if (keyword? (first args)) (cons nil args) args)
-        parent (if (keyword? parent) nil parent)]
-    (javax.swing.JColorChooser/showDialog parent title (to-color color))))
-
