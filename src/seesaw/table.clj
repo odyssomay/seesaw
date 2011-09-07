@@ -16,27 +16,71 @@
     :else {:key c :text (name c)}))
 
 (defn- unpack-row-map [col-key-map row]
-  (let [a (object-array (count col-key-map))]
+  (let [a (object-array (inc (count col-key-map)))]
     (doseq [[k v] row]
       (if-let [col-key (get col-key-map k)]
         (aset a col-key v)))
+    (aset a (count col-key-map) row)
     a))
 
 (defn- unpack-row [col-key-map row]
   (cond
-    (map? row) (unpack-row-map col-key-map row)
-    :else      (object-array row)))
+    (map? row)    (unpack-row-map col-key-map row)
+    (vector? row) (object-array (concat row [nil]))
+    :else         (throw (IllegalArgumentException. (str "row must be a map or vector, got " (type row))))))
 
-(defn- ^javax.swing.table.DefaultTableModel proxy-table-model [column-names column-key-map]
-  (proxy [javax.swing.table.DefaultTableModel] [(object-array column-names) 0]
-    (isCellEditable [row col] false)
-    (getValueAt [row col] 
-      (if (= -1 row col)
-        column-key-map
-        ; trick to force proxy-super macro to see correct type
-        ; to avoid reflection.
+(defn- insert-at [row-vec pos item] 
+  (apply conj (subvec row-vec 0 pos) item (subvec row-vec pos)))
+
+(defn- remove-at [row-vec pos] 
+  (let [[head [_ & tail]] (split-at pos row-vec)]
+    (vec (concat head tail))))
+
+(defn- ^javax.swing.table.DefaultTableModel proxy-table-model 
+  [column-names column-key-map]
+  (let [full-values (atom [])]
+    (proxy [javax.swing.table.DefaultTableModel] [(object-array column-names) 0]
+      (isCellEditable [row col] false)
+      (setRowCount [^Integer rows]
+        ; trick to force proxy-super macro to see correct type to avoid reflection.
+        (swap! full-values (fn [v] 
+                             (if (< rows (count v)) 
+                               (subvec v rows)
+                               (vec (concat v (take (- (count v) rows) (constantly nil)))))))
         (let [^javax.swing.table.DefaultTableModel this this]
-          (proxy-super getValueAt row col))))))
+          (proxy-super setRowCount rows)))
+      (addRow [^objects values]
+        (swap! full-values conj (last values))
+        ; TODO reflection - I can't get rid of the reflection here without crashes
+        ; It has something to do with Object[] vs. Vector overrides.
+        (proxy-super addRow values))
+      (insertRow [row ^objects values]
+        (swap! full-values insert-at row (last values))
+        ; TODO reflection - I can't get rid of the reflection here without crashes
+        ; It has something to do with Object[] vs. Vector overrides.
+        (proxy-super insertRow row values))
+      (removeRow [row]
+        (swap! full-values remove-at row)
+        (let [^javax.swing.table.DefaultTableModel this this]
+          (proxy-super removeRow row)))
+      (getValueAt [row col] 
+        (if (= -1 row col)
+          column-key-map
+          (if (= -1 col)
+            (get @full-values row)
+            (let [^javax.swing.table.DefaultTableModel this this]
+              (proxy-super getValueAt row col)))))
+      (setValueAt [value row col]
+        (if (= -1 col)
+          (swap! full-values assoc row value)
+          (let [^javax.swing.table.DefaultTableModel this this]
+            (proxy-super setValueAt value row col)))))))
+
+(defn- get-full-value [^javax.swing.table.TableModel model row]
+  (try
+    ; Try to grab the full value using proxy hack above
+    (.getValueAt model row -1)
+    (catch ArrayIndexOutOfBoundsException e nil)))
 
 (defn- get-column-key-map [^javax.swing.table.TableModel model]
   (try
@@ -60,8 +104,9 @@
                The order establishes the order of the columns in the table.
 
     :rows - a sequence of maps or vectors, possibly mixed. If a map, must contain
-            row data indexed by keys in :columns. If a vector, data is indexed
-            by position in the vector.
+            row data indexed by keys in :columns. Any additional keys will
+            be remembered and retrievable with (value-at). If a vector, data 
+            is indexed by position in the vector.
 
   Example:
     
@@ -71,7 +116,7 @@
                          {:age 75 :name \"Doris\"}])
 
     This creates a two column table model with columns \"name\" and \"Age\"
-    and two rows.
+    and two rows. 
 
   See:
     (seesaw.core/table)
@@ -96,18 +141,26 @@
 
 (defn- single-value-at
   [^javax.swing.table.TableModel model col-key-map row]
-  (reduce
-    (fn [result k] (assoc result k (.getValueAt model row (col-key-map k))))
-    {}
-    (keys col-key-map)))
+  (let [full-row (get-full-value model row)]
+    (merge 
+      full-row
+      (reduce
+        (fn [result k] (assoc result k (.getValueAt model row (col-key-map k))))
+        {}
+        (keys col-key-map)))))
 
 (defn value-at 
   "Retrieve one or more rows from a table or table model. target is a JTable or TableModel.
   rows is either a single integer row index, or a sequence of row indices. In the first case
   a single map of row values is returns. Otherwise, returns a sequence of maps.
 
+  Notes:
+
   If target was not created with (table-model), the returned map(s) are indexed
   by column name.
+
+  Any non-column keys passed to (update-at!) or the initial rows of (table-model)
+  are *remembered* and returned in the map.
 
   Examples:
 
@@ -138,6 +191,12 @@
   pairs where row is an integer row index and value is a map or vector of values
   just like the :rows property of (table-model).
 
+  Notes:
+
+    Any non-column keys, i.e. keys that weren't present in the original column
+    spec when the table-model was constructed will be remembered and retrievable
+    later with (value-at).
+
   Examples:
 
     ; Given a table created with column keys :a and :b, update row 3 and 5
@@ -156,7 +215,8 @@
       (doseq [i (range 0 (.getColumnCount target))]
         ; TODO this precludes setting a cell to nil. Do we care?
         (when-let [v (aget row-values i)]
-          (.setValueAt target (aget row-values i) row i))))
+          (.setValueAt target (aget row-values i) row i)))
+      (.setValueAt target (last row-values) row -1))
     target)
   ([target row value & more]
     (if more

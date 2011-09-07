@@ -10,7 +10,6 @@
 
 (ns seesaw.util
   (:require clojure.string)
-  (:use [seesaw meta])
   (:import [java.net URL MalformedURLException]))
 
 (defn check-args 
@@ -98,34 +97,11 @@
   "Try to parse (str s) as a URL. Returns new java.net.URL on success, nil 
   otherwise. This is different from clojure.java.io/as-url in that it doesn't
   throw an exception and it uses (str) on the input."
+  (if (instance? URL s) s
   (try
     (URL. (str s))
-    (catch MalformedURLException e nil)))
+    (catch MalformedURLException e nil))))
 
-(def ^{:private true} options-property "seesaw-creation-options")
-
-(defn- store-option-handlers
-  [target handler-map]
-  (put-meta! target options-property handler-map))
-
-(defn- get-option-handlers
-  [target]
-  (get-meta target options-property))
-
-(defn apply-options
-  [target opts handler-map]
-  (check-args (or (map? opts) (even? (count opts))) 
-              "opts must be a map or have an even number of entries")
-  (doseq [[k v] (if (map? opts) opts (partition 2 opts))]
-    (if-let [f (get handler-map k)]
-      (f target v)
-      (throw (IllegalArgumentException. (str "Unknown option " k)))))
-  (store-option-handlers target handler-map))
-
-(defn reapply-options
-  [target args default-options]
-  (let [options (or (get-option-handlers target) default-options)]
-    (apply-options target args options)))
 
 (defn to-dimension
   [v]
@@ -170,13 +146,8 @@
     children
     root))
 
-(defn ignore
-  "Might be used to explicitly ignore the default behaviour of options."
-  [x _]
-  x)
+(defn reverse-map 
+  "Reverse the direction of a map"
+  [m]
+  (into {} (for [[k v] m] [v k])))
 
-(defn ignore-options
-  "Create a ignore-map for options, which should be ignored. Ready to
-  be merged into default option maps."
-  [source-options]
-  (zipmap (keys source-options) (repeat ignore)))
